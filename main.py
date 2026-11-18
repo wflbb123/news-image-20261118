@@ -109,13 +109,18 @@ def draw_with_pil(output_path: Path) -> None:
     masthead_x = (WIDTH - masthead_w) // 2
     draw.text((masthead_x, y), masthead_text, font=masthead_font, fill=TEXT_COLOR)
     masthead_bbox = text_bbox(masthead_font, masthead_text)
-    masthead_h = masthead_bbox[3] - masthead_bbox[1]
-    y += masthead_h + 8
+    # textbbox is relative to the draw anchor (0,0): glyphs occupy
+    # y + bbox[1] .. y + bbox[3]. The old code used bbox height
+    # (bbox[3]-bbox[1]), placing the rule 9px above the glyph bottom.
+    masthead_text_bottom = y + masthead_bbox[3]
+    masthead_bottom = masthead_text_bottom
+    y = masthead_bottom
 
     # Thin rule under masthead text
-    rule_y = y
+    rule_y = masthead_text_bottom + 8
+    assert rule_y > masthead_text_bottom + 6, f"Masthead rule strikes through text: rule_y={rule_y}, masthead_bottom={masthead_text_bottom}"
     draw.line([(MARGIN, rule_y), (WIDTH - MARGIN, rule_y)], fill=RULE_COLOR, width=1)
-    y += 10
+    y = rule_y + 10
 
     # Date
     date_text = "WEDNESDAY, 18 NOVEMBER 2026"
@@ -123,12 +128,12 @@ def draw_with_pil(output_path: Path) -> None:
     date_x = (WIDTH - date_w) // 2
     draw.text((date_x, y), date_text, font=date_font, fill=TEXT_COLOR)
     date_bbox = text_bbox(date_font, date_text)
-    date_h = date_bbox[3] - date_bbox[1]
-    y += date_h + 8
+    date_bottom = y + date_bbox[3]
 
-    # Double rule under masthead block
-    double_rule_y1 = y
-    double_rule_y2 = y + 3
+    # Double rule under masthead block (below the date glyphs, not through them)
+    double_rule_y1 = date_bottom + 8
+    double_rule_y2 = double_rule_y1 + 3
+    assert double_rule_y1 > date_bottom + 6, f"Double rule strikes through date: rule_y={double_rule_y1}, date_bottom={date_bottom}"
     draw.line([(MARGIN, double_rule_y1), (WIDTH - MARGIN, double_rule_y1)], fill=RULE_COLOR, width=1)
     draw.line([(MARGIN, double_rule_y2), (WIDTH - MARGIN, double_rule_y2)], fill=RULE_COLOR, width=1)
     y = double_rule_y2 + 16
@@ -154,7 +159,17 @@ def draw_with_pil(output_path: Path) -> None:
     y = tag_rule_y + 12
 
     # Headline: "IRAN STRIKES US RADAR BASE IN BAHRAIN"
+    # Shrink until it fits inside the margins with >=100px clearance
+    # from the right margin (right edge <= 48 + 928 - 100 = 876).
     lead_headline = "IRAN STRIKES US RADAR BASE IN BAHRAIN"
+    lead_headline_size = LEAD_HEADLINE_SIZE
+    while lead_headline_size > 30:
+        lead_headline_font = ImageFont.truetype(str(SERIF_BOLD), lead_headline_size)
+        if text_width(lead_headline_font, lead_headline) <= lead_max_width - 100:
+            break
+        lead_headline_size -= 2
+    lead_headline_right = lead_x + text_width(lead_headline_font, lead_headline)
+    assert lead_headline_right <= WIDTH - MARGIN, f"Lead headline past margin: right={lead_headline_right}"
     headline_lines = wrap_text(lead_headline, lead_headline_font, lead_max_width)
     y, _ = draw_text_block(lead_x, y, headline_lines, lead_headline_font, TEXT_COLOR, line_spacing=1.15)
     headline_bottom = y
@@ -176,7 +191,7 @@ def draw_with_pil(output_path: Path) -> None:
     summary_top = y
     assert summary_top - headline_bottom >= 12, f"Insufficient gap: summary_top={summary_top}, headline_bottom={headline_bottom}, gap={summary_top - headline_bottom}"
 
-    y, _ = draw_text_block(lead_x, y, summary_lines[:2], body_font, TEXT_COLOR, line_spacing=1.3)
+    y, _ = draw_text_block(lead_x, y, summary_lines, body_font, TEXT_COLOR, line_spacing=1.3)
     lead_bottom = y
 
     # Graphic element: stylized radar dish / drone silhouette
@@ -196,9 +211,12 @@ def draw_with_pil(output_path: Path) -> None:
     # Signal arcs
     for r in [30, 55, 80]:
         draw.arc([cx - r, cy - r, cx + r, cy + r], start=30, end=150, fill=ACCENT_COLOR, width=1)
-    # Drone silhouette (small, top-right of radar)
-    drone_x = graphic_x + graphic_size + 10
-    drone_y = graphic_y - 10
+    # Drone silhouette: moved BELOW the radar dish (was top-right, where it
+    # collided with / was clipped at the headline's end). It now sits in the
+    # empty area under the dish, below the lead summary, clear of all text.
+    drone_x = cx - 12
+    drone_y = graphic_y + graphic_size + 10
+    assert drone_y > lead_bottom + 12, f"Drone too close to lead summary: drone_y={drone_y}, lead_bottom={lead_bottom}"
     # Body
     draw.ellipse([drone_x, drone_y, drone_x + 24, drone_y + 8], fill=ACCENT_COLOR)
     # Wings
@@ -206,8 +224,9 @@ def draw_with_pil(output_path: Path) -> None:
     draw.line([(drone_x + 12, drone_y + 4), (drone_x - 15, drone_y + 16)], fill=ACCENT_COLOR, width=2)
     draw.line([(drone_x + 12, drone_y + 4), (drone_x + 35, drone_y - 8)], fill=ACCENT_COLOR, width=2)
     draw.line([(drone_x + 12, drone_y + 4), (drone_x + 35, drone_y + 16)], fill=ACCENT_COLOR, width=2)
+    drone_bottom = drone_y + 16
 
-    lead_area_bottom = max(lead_bottom, graphic_y + graphic_size + 30)
+    lead_area_bottom = max(lead_bottom, graphic_y + graphic_size + 30, drone_bottom + 20)
 
     # ============================================================
     # 3. FOUR GRID BLOCKS (2x2)
@@ -215,6 +234,7 @@ def draw_with_pil(output_path: Path) -> None:
     grid_top = lead_area_bottom + 24
     col_width = (WIDTH - 2 * MARGIN - 24) // 2  # 24px gutter
     row_height = (HEIGHT - grid_top - MARGIN - 80) // 2  # Leave room for footer
+    grid_summary_lines = []
 
     grid_data = [
         {
@@ -262,9 +282,16 @@ def draw_with_pil(output_path: Path) -> None:
 
         y += 6
 
-        # Summary (1 line, wrapped if needed)
+        # Summary: render ALL wrapped lines (up to 3) — the old [:2] slice
+        # cut ASIA-PACIFIC mid-sentence ("...and Trump") and MARKETS
+        # mid-sentence ("...though"). There is a large empty band between
+        # the grid rows, so the extra line fits inside the block.
         summary_lines = wrap_text(block["summary"], body_font, col_width)
-        y, _ = draw_text_block(x, y, summary_lines[:2], body_font, TEXT_COLOR, line_spacing=1.3)
+        grid_summary_lines.append(len(summary_lines))
+        y, _ = draw_text_block(x, y, summary_lines, body_font, TEXT_COLOR, line_spacing=1.3)
+        # Assert the block stays inside its row (row 0) or above the footer (row 1)
+        block_limit = grid_top + (row + 1) * (row_height + 16) - 16 if row == 0 else HEIGHT - MARGIN - 50
+        assert y <= block_limit, f"Grid {idx} summary overflows block: bottom={y}, limit={block_limit}"
 
     grid_bottom = grid_top + 2 * (row_height + 16)
 
@@ -292,6 +319,12 @@ def draw_with_pil(output_path: Path) -> None:
     if footer_y + 22 <= HEIGHT - MARGIN:
         draw.text((tomorrow_x, footer_y), tomorrow_text, font=tomorrow_font, fill=ACCENT_COLOR)
         footer_y += 22
+
+    # Verification report (stdout only; does not affect the PNG)
+    print(f"masthead rule gap: {rule_y - masthead_text_bottom}px (rule_y={rule_y}, masthead_text_bottom={masthead_text_bottom})")
+    print(f"lead headline: size={lead_headline_size}, right edge x={lead_headline_right:.0f} (margin 976)")
+    print(f"drone: y={drone_y}, clearance below lead summary={drone_y - lead_bottom}px")
+    print(f"grid summary lines: {grid_summary_lines} (all rendered, none clipped)")
 
     # ============================================================
     # SAVE
